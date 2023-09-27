@@ -1,0 +1,8 @@
+include README
+include AUTHORS
+include INSTALL
+include MANIFEST.in
+include configure-mongodb
+include mongo/admin_mongo.log
+include mongo/admin_mongo.log
+include mongo/admin.conf

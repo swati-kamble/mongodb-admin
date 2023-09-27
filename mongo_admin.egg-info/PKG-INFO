@@ -1,0 +1,16 @@
+Metadata-Version: 1.0
+Name: mongo-admin
+Version: 0.1
+Summary: MongoDB-Admin
+Home-page: http://wiki.secondlife.com/wiki/Eventlet
+Author: Adrian Costia
+Author-email: sysadm.mongodb@gmail.com
+License: GPL
+Description: An easy way to create a cluster
+Keywords: mongodb shard cluster replicaset replication router
+Platform: any
+Classifier: License :: GNU General Public License (GPL)
+Classifier: Programming Language :: Python
+Classifier: Development Status :: Beta
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: MongoDB

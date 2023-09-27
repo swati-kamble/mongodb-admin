@@ -1,0 +1,460 @@
+#!/bin/bash
+
+# MongoDB - config dialog
+#
+# Copyright 2012 - Adrian Costia (adrian.costia@gmail.com)
+#
+# Permission is granted to copy, distribute and/or modify this document
+# under the terms of the GNU Free Documentation License, Version 1.3
+# or any later version published by the Free Software Foundation;
+# with no Invariant Sections, no Front-Cover Texts, and no Back-Cover Texts.
+# A copy of the license is included in the section entitled "GNU
+# Free Documentation License".
+
+
+# check dialog availability
+is_dialog=`which dialog`
+if [ -z $is_dialog ]; then
+  echo "Dialog utility not found! First, install the dialog component using command apt-get install dialog" 
+  exit 1
+fi
+# check mongo availability
+is_mongo=`which mongod`
+if [ -z $is_mongo ]; then
+ dialog --clear --title "MongoDB" --msgbox "MongoDB not found in your system! First, install the dialog component using command apt-get install mongodb" 10 30 
+ exit 1
+fi
+
+eth_list() {
+    # get eth list
+    declare -a ips # declare array
+    idx=0
+    for i in $( ifconfig | grep 'inet addr' | awk '{print $2}'| sed 's#addr:##g');
+    do
+        ips[$idx]=$i
+        let "idx += 1"
+    done
+    idx=0
+    for i in $(ifconfig | grep 'eth' | awk '{print $1}');
+    do
+        echo $i ${ips[$idx]} >> _eth_list
+        let "idx += 1"
+    done
+}
+eth_list
+
+clean() {
+    rm -f _*
+}
+
+
+
+show_info() {
+    dialog --backtitle "MongoDB configuration" --title "MongoDB Info" --infobox "Configuration saved! Press a key" 5 60
+}
+
+msgbox() {
+    if [ -z "$1" ]
+    then 
+	echo "Pameter #1 is empty!"
+	exit 0
+    fi
+    content=${1-"MongoDB"}
+    # show dialog
+    dialog --title "MongoDB Info" \
+           --backtitle "MongoDB configuration" \
+           --msgbox "$content" 10 55
+}
+
+bind_ip() {
+    $eth0_ip=$(ifconfig eth0 | head -n2 | tail -n1 | cut -d' ' -f12 | cut -c 6-)
+    dialog --title "Hostname/IP address" --backtitle "MongoDB configuration" \
+           --cancel-label "Back" --colors --ok-label "Set host" \
+           --inputbox  "Enter host name or IP address and then press Enter\n\\nExample: shard01.mongodb.com:27021 " 10 60 $(ifconfig eth0 | head -n2 | tail -n1 | cut -d' ' -f12 | cut -c 6-) 2>_mongohost.$$
+    local host_name=`cat _mongohost.$$`
+}
+
+bind_port() {
+    if [ -z "$1" ]
+    then 
+	echo "Pameter #1 is empty!"
+	exit 0
+    fi
+    port=${1-27017}
+    dialog --title "Mongo Port" --backtitle "MongoDB configuration" \
+           --cancel-label "Back" --colors --ok-label "Set Mongo Port" \
+           --inputbox  "Enter port number: " 10 40 $port 2>_mongoport.$$
+}
+
+select_folder() {
+    if [ -z "$1" ]
+    then
+	echo "Pameter #1 is empty!"
+	exit 0
+    fi
+    if [ -d "$1" ]; then
+      dbpath=${1-"$1"}
+    else
+      dbpath=${1-"/"}
+    fi
+    dialog --title "Select database folder" --backtitle "MongoDB configuration" \
+    	   --cancel-label "Back" --colors --ok-label "Select DB folder" \
+           --dselect $dbpath 20 70 2>_dbpath.$$
+}
+
+select_log() {
+    dblog="/var/log/mongodb/mongodb.log"
+    if [ ! -d "/var/log/mongodb/" ]; then
+	dblog="/tmp/mongodb.log"
+	`touch /tmp/mongodb.log`
+    fi
+    if [! -e $dblog ]; then
+	dblog="/var/log/mongodb/mongodb.log"
+	`touch $dblog`
+    fi
+    if [! -w $db_log ]; then
+	dialog --msgbox "You don't have 'write' permission on this file!" 8 45
+	return
+    fi
+    dialog --title "Select LOG file" --backtitle "MongoDb Configuration" \
+           --cancel-label "Back" --colors --ok-label "Select LOG file" \
+           --fselect $dblog 20 70 2>_dblogfile.$$
+    if [ $? -eq 1 ]; then
+	return
+    fi
+}
+
+mongo_options() {
+    dialog --separate-output --ok-label "Save Configuration" --cancel-label "Back" --checklist "Choose MongoDB options:" 25 70 8 \
+	   1 "Running in daemon mode" on \
+	   2 "Enable simple auth" off \
+	   3 "Enable web admin (run on port 28017)" off  \
+	   4 "Disable journaling" off \
+	   5 "Disable listening on unix sockets" off \
+	   6 "Ignore query hints" off \
+	   7 "Show CPU utilization" off \
+	   8 "Append to log file" off 2>_mongooptions.$$
+
+    options=`cat _mongooptions.$$`
+    # user press "save" ?
+    if [ $? -eq 1 ]; then
+	msgbox "Configuration was not saved!"
+	return
+    fi
+    # set options
+    local mongo_admin="mongo-admin"
+    for opt in $options
+    do
+	case $opt in
+	    1)
+		mongo_admin="$mongo_admin --fork";;
+	    2)
+		mongo_admin="$mongo_admin --auth" ;;
+	    3) 
+		mongo_admin="$mongo_admin --rest" ;;
+	    4) 
+		mongo_admin="$mongo_admin --nojurnaling" ;;
+	    5) 
+		mongo_admin="$mongo_admin --nounixsocket" ;;
+	    6) 
+		mongo_admin="$mongo_admin --nohints" ;;
+	    7)
+		mongo_admin="$mongo_admin --cpu" ;;
+	    8)
+		mongo_admin="$mongo_admin --logappend" ;;
+	esac
+    done
+    echo $mongo_admin > _adminopt
+}
+
+server_options() {
+    dialog --title "Server Type" --backtitle "MongoDB configuration" \
+           --cancel-label "Back" --colors --ok-label "Continue" \
+           --radiolist "Select server type" 25 70 8 \
+           1 "Shard" on \
+           2 "Config" off \
+           3 "Router" off 2>_servertype.$$
+}
+
+replication_options() {
+    dialog --title "Server Type" --backtitle "MongoDB configuration" \
+           --cancel-label "Back" --colors --ok-label "Continue" \
+           --radiolist "Select server type" 25 70 8 \
+           1 "Master" on \
+           2 "Slave" off 2>_replicationtype.$$
+}
+
+view_mongo_config() {
+    if [ -e "/etc/mongodb.conf" ]; then
+	dialog --textbox /etc/mongodb.conf 30 120
+    fi
+}
+
+use_replica() {
+ dialog --title "Use replicaSet ?" --yesno "Enable sharding with replicaSet ?" 7 55
+ pressed_no=$?
+ # user press NO button
+ if [ $pressed_no -eq 1 ]; then
+    return
+ else
+    dialog --title "ReplicaSet" --backtitle "MongoDB configuration" \
+           --cancel-label "Back" --colors --ok-label "Set Replica" \
+           --inputbox  "Enter replicaSet name and hosts and press Enter.\n\nUse COMMA to separate the hosts like in the next example:\n\ncsign/shard01.mongodb.com:27021,shard02.mongodb.com:27021\n  -> where 'csign' = replica name\n" 15 80 2>_shardreplica.$$
+ fi
+}
+
+
+replicaset() {
+    dialog --title "ReplicaSet Name" --backtitle "MongoDB configuration" \
+           --cancel-label "Back" --colors --ok-label "Set replica name" \
+           --inputbox  "Enter replica name then press 'Enter'\n\\nExample: repl002 " 10 60 repl01 2>_replicaname.$$
+    replica_name=`cat _replicaname.$$`
+    if [ $? -eq 1 ]; then
+	return
+    fi
+    if [ -z "$replica_name" ]; then
+	msgbox "Replica name is not specified!"
+	return
+    fi
+    # bind ip
+    bind_ip
+    if [ $? -eq 1 ]; then
+	return
+    fi
+    host_ip=`cat _mongohost.$$`
+    if [ -z $host_ip  ]; then
+	msgbox "Hostname/IP is not specified! Using default host: 'localhosthost' "
+	host_ip = '127.0.0.1'
+    fi
+    # select port
+    bind_port 27020
+    if [ $? -eq 1 ]; then
+        return
+    fi
+    mongo_port=`cat _mongoport.$$`
+    if [ -z "$mongo_port"  ]; then
+	msgbox "Mongo port is not specified! Default mongo port is 27017.Press <OK> to return."
+	return 
+    fi
+    # select database folder
+    select_folder "/data/"
+    dbpath=`cat _dbpath.$$`
+    if [ -z "$dbpath" ]; then
+        msgbox "Please select the database folder"
+    fi
+    # select log file
+    select_log
+    logfile=`cat _dblogfile.$$`
+    # show option screen
+    mongo_options
+    admin_opt=`cat _adminopt`
+    echo $admin_opt "--replicaset" $replica_name --dbpath $dbpath "--port" $mongo_port "--bind" $host_ip "--logpath" $logfile >> mongo-replicaset
+    # create and execute scipt file
+    if [ -e "mongo-replicaset" ]; then
+       `chmod +x mongo-replicaset`
+       `./mongo-replicaset`
+        msgbox "Configuration saved! Don't forget to initialize replicaSet using command 'mongo-admin --initreplica <replica_name> <srv1[:port],srv2[:port],srv3[:port]...>'"
+    fi
+}
+
+replication() {
+    replication_options
+    if [ $? -eq 1 ]; then
+	return
+    fi
+    # get server type
+    replication_type=`cat _replicationtype.$$`
+    if [ "$replication_type" -eq 2 ]; then  # user select slave
+	dialog --title "Master Hostname/IP address" --backtitle "MongoDB configuration" \
+    	       --cancel-label "Back" --colors --ok-label "Set host" \
+        	--inputbox  "Enter master host name or IP address and port!\nPress 'Enter' when you finish.\n\nExample: shard01.mongodb.com:27021 " 13 60 $(ifconfig eth0 | head -n2 | tail -n1 | cut -d' ' -f12 | cut -c 6-) 2>_mongomaster.$$
+        mongo_master_host=`cat _mongomaster.$$`
+        if [ $? -eq 1 ]; then
+    	    return
+    	fi
+    	if [ -z "$mongo_master_host" ]; then # check to see if host is empty
+    	    msgbox "Master host is empty!"
+    	    return
+    	fi
+    fi
+    # bind slave IP : can be eth0 IP or eth1 IP
+    bind_ip
+    bind_ip=`cat _mongohost.$$`
+    if [ $? -eq 0 ]; then # user press <OK>
+        if [ -z "$bind_ip" ]; then
+		msgbox "Hostname/IP is not specified! Using default host: 'localhosthost' "
+		bind_ip = '127.0.0.1'
+        fi
+	# select port
+	bind_port 27018
+	mongo_port=`cat _mongoport.$$`
+	if [ $? -eq 0 ]; then # user press <OK>
+	    if [ -z "$mongo_port" ]; then
+		msgbox "Slave port is not specified!"
+		return
+	    fi
+	fi
+	# select DB folder
+	select_folder "/data/"
+	dbpath=`cat _dbpath.$$`
+	if [ -z "$dbpath" ]; then
+    	    msgbox "Please select the database folder"
+	fi
+	# select log file
+	select_log
+	logfile=`cat _dblogfile.$$`
+	# show option screen
+	mongo_options
+	admin_opt=`cat _adminopt`
+    	# create replication
+    	if [ "$replication_type" -eq 2 ]; then	# server is slave
+    		echo $admin_opt "--slave" $dbpath "--source" $mongo_master_host "--port" $mongo_port "--bind" $bind_ip "--logpath" $logfile >> mongo-slave
+    	else # server is master
+		echo $admin_opt "--master" $dbpath "--port" $mongo_port "--bind" $bind_ip "--logpath" $logfile >> mongo-master
+    	fi
+    	# create and execute scipt file
+    	if [ -e "mongo-master" ]; then
+		`chmod +x mongo-master`
+		show_info
+		`./mongo-master`
+    	fi
+    	if [ -e "mongo-slave" ]; then
+		`chmod +x mongo-slave`
+		show_info
+		./mongo-slave
+    	fi
+    fi
+}
+
+sharding() {
+    # select server type
+    server_options
+    if [ $? -eq 1 ]; then
+	return
+    fi
+    # get server type
+    server_type=`cat _servertype.$$`
+    # bind ip
+    bind_ip
+    retopt=$?
+    hostdb=`cat _mongohost.$$`
+    # user press <OK> button
+    if [ $retopt -eq 0 ]; then
+	# check if size of hostname is zero
+	if [ -z $hostdb ]; then
+	   return
+        fi
+        # select mongo port
+        bind_port 27017
+        if [ $? -eq 1 ]; then
+            return
+        else
+    	    mongoport=`cat _mongoport.$$`
+        fi
+        # set the database directory
+    	if [ "$server_type" -eq 1 -o "$server_type" -eq 2 ]
+    	then
+    	    select_folder "/data/"
+    	    dbpath=`cat _dbpath.$$`
+    	fi
+	# select log file
+	select_log
+	db_log=`cat _dblogfile.$$`
+    	if [ "$server_type" -eq 1 ]; then # server is shard
+    	    # use replica set ?
+    	    use_replica
+    	    shard_with_replica=`cat _shardreplica.$$`
+    	fi
+	# show option screen
+	mongo_options
+	admin_opt=`cat _adminopt`
+    	if [ "$server_type" -eq 1 ]; then	# server is shard
+    	    if [ -z shard_with_replica ]; then 
+    	        echo $admin_opt "--shard" $dbpath " --port " $mongoport " --bind " $hostdb " --logpath " $db_log >> mongo-sharding
+    	    else
+    	        echo $admin_opt "--shard" $dbpath "--port" $mongoport "--bind" $hostdb "--replica" $shard_with_replica "--logpath" $db_log >> mongo-sharding
+    	    fi
+    	fi
+    	if [ "$server_type" -eq 2 ]; then	# server is config
+    	    echo $admin_opt "--config" $dbpath " --port " $mongoport " --bind " $hostdb " --logpath " $db_log >> mongo-config
+    	fi
+    	if [ "$server_type" -eq 3 ]; then	# server is router
+    	    echo $admin_opt "--router --port " $mongoport " --bind " $hostdb " --logpath " $db_log >> mongo-router
+    	fi
+    	# execute script
+    	if [ -e "mongo-sharding" ]; then
+    		`chmod +x mongo-sharding`
+    		`./mongo-sharding`
+    		show_info
+    	fi
+    	if [ -e "mongo-config" ]; then
+    		`chmod +x mongo-config`
+    		`./mongo-config`
+    		show_info
+    	fi
+    	if [ -e "mongo-router" ]; then
+    		show_info
+    		`chmod +x mongo-router`
+    		`./mongo-router`
+    		show_info
+    	fi
+    else
+	return 
+    fi
+}
+
+
+example() {
+    dialog --backtitle "MongoDB configuration" --title "[ MONGO-ADMIN EXAMPLES ]" --textbox `mongo-admin --example` 20 66
+}
+
+eth_config() {
+    if [! -e "_eth_list" ]; then
+	eth_list
+    fi
+    dialog --backtitle "MongoDB configuration" --title "[ ETH LIST ]" --textbox _eth_list 10 40
+}
+
+disk_statistics() {
+   df -h | grep "^/" > disk.$$
+   dialog --backtitle "MongoDB configuration" \
+          --title "[DISK STATISTICS]" \
+          --textbox disk.$$ 20 66
+}
+
+# Define main program dialog
+main() {
+  while :
+  do
+    dialog --clear --no-ok --no-cancel \
+           --backtitle "MongoDB configuration" \
+           --title "[M o n g o DB]"  \
+           --menu  "What do you want to do ?" 20 60 6 \
+           "shard"   	 "Create shard (with replicaSet)/config/router" \
+           "replicaset"  "Create replicaSet" \
+           "replication" "Replication - master/slave server" \
+           "eth"	 "Ethernet Configuration" \
+           "config"  	 "View Mongo Config" \
+           "disks"   	 "Show disk statistics" \
+           "example"	 "How to use mongo-admin" \
+           "exit"    	 "Exit" 2>_menuchoices.$$
+    retopt=$?
+    choice=`cat _menuchoices.$$`
+    case $retopt in
+       0) case $choice in
+            config ) 	 view_mongo_config ;;
+            shard  )  	 sharding   ;;
+            replicaset)	 replicaset ;;
+            replication) replication ;;
+            eth) eth_config ;;
+            disks)  	 disk_statistics ;; 
+            exit)  echo "Bye"; clear; exit 0 ;;
+          esac ;;
+      255) clean; clear; exit ;;
+      *) clean; clear; exit ;;
+    esac
+   done
+}
+
+# execute program
+main
